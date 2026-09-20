@@ -427,6 +427,24 @@ func (p *printer) parameters(fields *ast.FieldList) {
 	p.print(fields.Closing, token.RPAREN)
 }
 
+// typeParams prints a type parameter list such as [T, U any] or
+// [S ~[]E, E any]. Type parameter lists are short in practice, so they are
+// always printed on a single line.
+func (p *printer) typeParams(fields *ast.FieldList) {
+	p.print(fields.Opening, token.LBRACK)
+	for i, par := range fields.List {
+		if i > 0 {
+			p.print(token.COMMA, blank)
+		}
+		if len(par.Names) > 0 {
+			p.identList(par.Names, false)
+			p.print(blank)
+		}
+		p.expr(stripParensAlways(par.Type))
+	}
+	p.print(fields.Closing, token.RBRACK)
+}
+
 func (p *printer) signature(params, result *ast.FieldList) {
 	if params != nil {
 		p.parameters(params)
@@ -1048,6 +1066,9 @@ func (p *printer) expr1(expr ast.Expr, prec1, depth int) {
 
 	case *ast.FuncType:
 		p.print(token.FUNC)
+		if x.TypeParams != nil {
+			p.typeParams(x.TypeParams)
+		}
 		p.signature(x.Params, x.Results)
 
 	case *ast.InterfaceType:
@@ -1875,6 +1896,9 @@ func (p *printer) spec(spec ast.Spec, n int, doIndent bool) {
 	case *ast.TypeSpec:
 		p.setComment(s.Doc)
 		p.expr(s.Name)
+		if s.TypeParams != nil {
+			p.typeParams(s.TypeParams)
+		}
 		if n == 1 {
 			p.print(blank)
 		} else {
@@ -2161,6 +2185,9 @@ func (p *printer) funcDecl(d *ast.FuncDecl) {
 	p.expr(d.Name)
 	if d.Operator && d.Recv != nil {
 		p.print(blank)
+	}
+	if d.Type.TypeParams != nil {
+		p.typeParams(d.Type.TypeParams)
 	}
 	p.signature(d.Type.Params, d.Type.Results)
 	p.funcBody(p.distanceFrom(d.Pos(), startCol), vtab, d.Body)

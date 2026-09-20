@@ -217,7 +217,8 @@ func (s *Scanner) scanComment() string {
 		goto exit
 	}
 	// # - style comment, as default
-	s.next()
+	// (the '#' was already consumed by the caller, so s.ch is the first
+	// character of the comment text)
 	for s.ch != '\n' && s.ch >= 0 {
 		if s.ch == '\r' {
 			numCR++
@@ -245,12 +246,12 @@ exit:
 
 	// interpret line directives
 	// (//line directives must start at the beginning of the current line)
-	if next >= 0 /* implies valid comment */ && (lit[1] == '*' || offs == s.lineOffset) && bytes.HasPrefix(lit[2:], prefix) {
+	if next >= 0 /* implies valid comment */ && len(lit) >= 2 && (lit[1] == '*' || offs == s.lineOffset) && bytes.HasPrefix(lit[2:], prefix) {
 		s.updateLineInfo(next, offs, lit)
 	}
 
 	if numCR > 0 {
-		lit = stripCR(lit, lit[1] == '*')
+		lit = stripCR(lit, len(lit) >= 2 && lit[1] == '*')
 	}
 
 	return string(lit)

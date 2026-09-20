@@ -1,0 +1,54 @@
+# type parameter lists must survive gop fmt
+
+type tpNum interface {
+	~int | ~float64
+}
+
+func tpSum[T tpNum](xs []T) T {
+	var total T
+	for x in xs {
+		total += x
+	}
+	return total
+}
+
+type tpPair[T, U any] struct {
+	First  T
+	Second U
+}
+
+func (p *tpPair[T, U]) tpSwap() *tpPair[U, T] {
+	return &tpPair[U, T]{First: p.Second, Second: p.First}
+}
+
+func (p *tpPair[T, U]) tpGet() (T, U) {
+	return p.First, p.Second
+}
+
+type tpIntPair = tpPair[int, int]
+
+type tpStack[T any] struct {
+	items []T
+}
+
+func (s *tpStack[T]) tpPush(v T) {
+	s.items = append(s.items, v)
+}
+
+func (s *tpStack[T]) tpPop() T {
+	n := len(s.items) - 1
+	v := s.items[n]
+	s.items = s.items[:n]
+	return v
+}
+
+func tpUse() {
+	echo tpSum([1, 2, 3])
+	echo tpSum[float64]([1.5, 2.5])
+	p := &tpPair[string, int]{First: "hello", Second: 7}
+	q := p.tpSwap()
+	echo q.First, q.Second
+	st := &tpStack[int]{}
+	st.tpPush(1)
+	echo st.tpPop()
+}

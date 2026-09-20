@@ -381,7 +381,7 @@ func (p *printer) writeCommentPrefix(pos, next token.Position, prev *ast.Comment
 		return
 	}
 
-	if pos.Line == p.last.Line && (prev == nil || prev.Text[1] != '/') {
+	if pos.Line == p.last.Line && (prev == nil || !isSlashComment(prev.Text)) {
 		// comment on the same line as last item:
 		// separate with at least one separator
 		hasSep := false
@@ -479,7 +479,7 @@ func (p *printer) writeCommentPrefix(pos, next token.Position, prev *ast.Comment
 
 		// make sure there is at least one line break
 		// if the previous comment was a line comment
-		if n == 0 && prev != nil && prev.Text[1] == '/' {
+		if n == 0 && prev != nil && isSlashComment(prev.Text) {
 			n = 1
 		}
 
@@ -652,6 +652,18 @@ func stripCommonPrefix(lines []string) {
 	}
 }
 
+// isSlashComment reports whether the text of a comment is a //-style comment.
+// A '#'-style line comment, which XGo also accepts, is not one, and the text of
+// such a comment may be as short as a single '#'.
+func isSlashComment(text string) bool {
+	return len(text) >= 2 && text[1] == '/'
+}
+
+// isBlockComment reports whether the text of a comment is a /*-style comment.
+func isBlockComment(text string) bool {
+	return len(text) >= 2 && text[1] == '*'
+}
+
 func (p *printer) writeComment(comment *ast.Comment) {
 	text := comment.Text
 	pos := p.posFor(comment.Pos())
@@ -665,7 +677,7 @@ func (p *printer) writeComment(comment *ast.Comment) {
 	}
 
 	// shortcut common case of //-style comments
-	if text[1] == '/' {
+	if isSlashComment(text) {
 		p.writeString(pos, trimRight(text), true)
 		return
 	}
@@ -779,7 +791,7 @@ func (p *printer) intersperseComments(next token.Position, tok token.Token) (wro
 		// use that information to decide more directly.
 		needsLinebreak := false
 		if p.mode&noExtraBlank == 0 &&
-			last.Text[1] == '*' && p.lineFor(last.Pos()) == next.Line &&
+			isBlockComment(last.Text) && p.lineFor(last.Pos()) == next.Line &&
 			tok != token.COMMA &&
 			(tok != token.RPAREN || p.prevOpen == token.LPAREN) &&
 			(tok != token.RBRACK || p.prevOpen == token.LBRACK) {
@@ -791,7 +803,7 @@ func (p *printer) intersperseComments(next token.Position, tok token.Token) (wro
 		}
 		// Ensure that there is a line break after a //-style comment,
 		// before EOF, and before a closing '}' unless explicitly disabled.
-		if last.Text[1] == '/' ||
+		if isSlashComment(last.Text) ||
 			tok == token.EOF ||
 			tok == token.RBRACE && p.mode&noExtraLinebreak == 0 {
 			needsLinebreak = true

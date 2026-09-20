@@ -1,0 +1,13 @@
+# a lone '#' is a line comment with no text
+#
+# it used to swallow the line that followed it, and the printer then
+# panicked while looking for the '/*' of the comment it assumed
+
+func hashFoo() {
+	#
+	#
+}
+
+# trailing '#' comments are normalized to a single space
+hashBar := 1 #
+echo hashBar #
