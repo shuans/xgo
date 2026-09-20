@@ -320,6 +320,9 @@ func compileMember(cb *gogen.CodeBuilder, lhs int, v ast.Node, name string, flag
 	default:
 		mflag = gogen.MemberFlagMethodAlias
 	}
+	if mflag != gogen.MemberFlagRef { // a method of a type parameter cannot be assigned to
+		typeParamMember(cb, name, v)
+	}
 	_, err := cb.Member(name, lhs, mflag, v)
 	return err
 }

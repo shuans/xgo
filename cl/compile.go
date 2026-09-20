@@ -1323,39 +1323,39 @@ func preloadFile(p *gogen.Package, ctx *blockCtx, f *ast.File, goFile string, ge
 							} else if d.Doc != nil {
 								defs.SetComments(toGoCommentGroup(d.Doc))
 							}
-						ld.typInit = func() { // decycle
-							if debugLoad {
-								log.Println("==> Load > InitType", name)
+							ld.typInit = func() { // decycle
+								if debugLoad {
+									log.Println("==> Load > InitType", name)
+								}
+								// Type parameters must be visible while converting the
+								// underlying type, and must be handed to InitType so
+								// that gogen can emit them.
+								var typeParams []*types.TypeParam
+								if t.TypeParams != nil {
+									typeParams = toTypeParams(ctx, t.TypeParams)
+								}
+								if len(typeParams) > 0 {
+									ctx.tlookup = &typeParamLookup{typeParams: typeParams}
+									defer func() {
+										ctx.tlookup = nil
+									}()
+									org := ctx.inInst
+									ctx.inInst = 0
+									defer func() {
+										ctx.inInst = org
+									}()
+								}
+								var underlying types.Type
+								if enumType != nil {
+									underlying = inferEnumUnderlyingType(ctx, enumType)
+								} else {
+									underlying = toType(ctx, t.Type)
+								}
+								typ := decl.InitType(ctx.pkg, underlying, typeParams...)
+								if rec := ctx.recorder(); rec != nil {
+									rec.Def(tName, typ.Obj())
+								}
 							}
-							// Type parameters must be visible while converting the
-							// underlying type, and must be handed to InitType so
-							// that gogen can emit them.
-							var typeParams []*types.TypeParam
-							if t.TypeParams != nil {
-								typeParams = toTypeParams(ctx, t.TypeParams)
-							}
-							if len(typeParams) > 0 {
-								ctx.tlookup = &typeParamLookup{typeParams: typeParams}
-								defer func() {
-									ctx.tlookup = nil
-								}()
-								org := ctx.inInst
-								ctx.inInst = 0
-								defer func() {
-									ctx.inInst = org
-								}()
-							}
-							var underlying types.Type
-							if enumType != nil {
-								underlying = inferEnumUnderlyingType(ctx, enumType)
-							} else {
-								underlying = toType(ctx, t.Type)
-							}
-							typ := decl.InitType(ctx.pkg, underlying, typeParams...)
-							if rec := ctx.recorder(); rec != nil {
-								rec.Def(tName, typ.Obj())
-							}
-						}
 						}
 					} else {
 						ctx.generics[name] = true

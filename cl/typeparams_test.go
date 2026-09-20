@@ -999,3 +999,85 @@ func main() {
 }
 `)
 }
+
+func TestTypeParamsMethodCall(t *testing.T) {
+	gopClTest(t, `
+type namer interface {
+	Name() string
+}
+
+type Score int
+
+func (s Score) Name() string {
+	return "score"
+}
+
+func show[T namer](x T) string {
+	return x.Name()
+}
+
+println show(Score(1))
+`, `package main
+
+import "fmt"
+
+type namer interface {
+	Name() string
+}
+type Score int
+
+func (s Score) Name() string {
+	return "score"
+}
+func show[T namer](x T) string {
+	return interface {
+		Name() string
+	}(x).Name()
+}
+func main() {
+	fmt.Println(show(Score(1)))
+}
+`)
+}
+
+// A constraint holding a type term cannot be used as an interface value, so
+// the method of such a type parameter is reached through an interface holding
+// just that method.
+func TestTypeParamsMethodCallTypeTerm(t *testing.T) {
+	gopMixedClTest(t, "main", `package main
+
+type Adder interface {
+	~int
+	Add(n int) int
+}
+`, `
+type Score int
+
+func (s Score) Add(n int) int {
+	return int(s) + n
+}
+
+func show[T Adder](x T) {
+	echo x.Add(10)
+}
+
+show(Score(5))
+`, `package main
+
+import "fmt"
+
+type Score int
+
+func (s Score) Add(n int) int {
+	return int(s) + n
+}
+func show[T Adder](x T) {
+	fmt.Println(interface {
+		Add(n int) int
+	}(x).Add(10))
+}
+func main() {
+	show(Score(5))
+}
+`)
+}

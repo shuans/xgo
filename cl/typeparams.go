@@ -335,6 +335,46 @@ func (p *typeParamLookup) Lookup(name string) *types.TypeParam {
 	return nil
 }
 
+// typeParamMember converts the value on top of the code builder stack to an
+// interface holding the method called name, when that value has a type
+// parameter type that has such a method.
+//
+// go/types knows that a type parameter has the methods common to the types of
+// its type set, but gogen looks members up on named, struct and interface types
+// only, so a method of a type parameter is otherwise reported as undefined. The
+// conversion keeps the access valid: the type set of a type parameter is a
+// subset of the type set of an interface holding one of its methods.
+func typeParamMember(cb *gogen.CodeBuilder, name string, src ast.Node) {
+	stk := cb.InternalStack()
+	e := stk.Get(-1)
+	tp, ok := types.Unalias(e.Type).(*types.TypeParam)
+	if !ok {
+		return
+	}
+	fn := typeParamMethod(tp, name)
+	if fn == nil {
+		return
+	}
+	iface := types.NewInterfaceType([]*types.Func{fn}, nil)
+	iface.Complete()
+	stk.Pop()
+	cb.Typ(iface, src)
+	stk.Push(e)
+	cb.CallWith(1, 1, 0, src)
+}
+
+// typeParamMethod returns the method called name of the method set of a type
+// parameter, or nil if the type parameter has no such method.
+func typeParamMethod(tp *types.TypeParam, name string) *types.Func {
+	mset := types.NewMethodSet(tp)
+	for i := 0; i < mset.Len(); i++ {
+		if fn, ok := mset.At(i).Obj().(*types.Func); ok && fn.Name() == name {
+			return fn
+		}
+	}
+	return nil
+}
+
 func initType(ctx *blockCtx, named *types.Named, spec *ast.TypeSpec) {
 	typeParams := toTypeParams(ctx, spec.TypeParams)
 	if len(typeParams) > 0 {
