@@ -17,9 +17,11 @@ type Result struct {
 	Path       string `json:"path"`
 	ImportedBy int    `json:"importedBy"`
 }
-//line dql/fetcher/pkg.go.dev/importedBy/importedBy.xgo:30:1
+
 // New extracts the number of packages that import the given package from
 // the given HTML document and returns the Result.
+//
+//line dql/fetcher/pkg.go.dev/importedBy/importedBy.xgo:30:1
 func New(input interface{}, doc html.NodeSet) Result {
 //line dql/fetcher/pkg.go.dev/importedBy/importedBy.xgo:33:1
 	const importedBy = "Imported By:"
@@ -98,13 +100,16 @@ func New(input interface{}, doc html.NodeSet) Result {
 //line dql/fetcher/pkg.go.dev/importedBy/importedBy.xgo:42:1
 	return Result{path, nImported}
 }
-//line dql/fetcher/pkg.go.dev/importedBy/importedBy.xgo:45:1
+
 // URL returns the input URL for the given input.
 // Input is expected to be a Go package path.
+//
+//line dql/fetcher/pkg.go.dev/importedBy/importedBy.xgo:45:1
 func URL(input interface{}) string {
 //line dql/fetcher/pkg.go.dev/importedBy/importedBy.xgo:48:1
 	return "https://pkg.go.dev/" + input.(string)
 }
+
 //line dql/fetcher/pkg.go.dev/importedBy/importedBy.xgo:51:1
 func init() {
 //line dql/fetcher/pkg.go.dev/importedBy/importedBy.xgo:52:1

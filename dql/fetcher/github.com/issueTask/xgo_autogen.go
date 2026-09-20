@@ -10,18 +10,22 @@ import (
 
 const XGoPackage = "github.com/goplus/xgo/dql/html"
 const _ = true
+
 // Task represents a GitHub issue task item.
 type Task struct {
 	Desc string `json:"desc"`
 	Done bool   `json:"done"`
 }
+
 // Result represents the result of issue task fetcher.
 type Result struct {
 	Issue string `json:"issue"`
 	Tasks []Task `json:"tasks"`
 }
-//line dql/fetcher/github.com/issueTask/issueTask.xgo:36:1
+
 // New extracts issue tasks from the given document and returns the Result.
+//
+//line dql/fetcher/github.com/issueTask/issueTask.xgo:36:1
 func New(input interface{}, doc html.NodeSet) Result {
 //line dql/fetcher/github.com/issueTask/issueTask.xgo:38:1
 	issue := input.(string)
@@ -60,10 +64,12 @@ func New(input interface{}, doc html.NodeSet) Result {
 //line dql/fetcher/github.com/issueTask/issueTask.xgo:41:1
 	return Result{issue, tasks}
 }
-//line dql/fetcher/github.com/issueTask/issueTask.xgo:44:1
+
 // URL returns the URL from the input.
 // Input can be either a full github issue URL or a shorthand format
 // like "goplus/llgo#642".
+//
+//line dql/fetcher/github.com/issueTask/issueTask.xgo:44:1
 func URL(input interface{}) string {
 //line dql/fetcher/github.com/issueTask/issueTask.xgo:48:1
 	issue := input.(string)
@@ -75,6 +81,7 @@ func URL(input interface{}) string {
 //line dql/fetcher/github.com/issueTask/issueTask.xgo:52:1
 	return "https://github.com/" + strings.Replace(issue, "#", "/issues/", 1)
 }
+
 //line dql/fetcher/github.com/issueTask/issueTask.xgo:55:1
 func init() {
 //line dql/fetcher/github.com/issueTask/issueTask.xgo:56:1

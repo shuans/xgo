@@ -33,6 +33,7 @@ type Cmd_list struct {
 type App struct {
 	xcmd.App
 }
+
 //line cmd/hdq/main_app.gox:26
 func (this *App) MainEntry() {
 //line cmd/hdq/main_app.gox:26:1
@@ -45,6 +46,7 @@ func (this *App) Main() {
 	_xgo_obj1 := &Cmd_list{App: this}
 	xcmd.XGot_App_Main(this, _xgo_obj0, _xgo_obj1)
 }
+
 //line cmd/hdq/fetch_cmd.gox:24
 func (this *Cmd_fetch) Main(_xgo_arg0 string) {
 	this.Command.Main(_xgo_arg0)
@@ -135,6 +137,7 @@ func (this *Cmd_fetch) Main(_xgo_arg0 string) {
 func (this *Cmd_fetch) Classfname() string {
 	return "fetch"
 }
+
 //line cmd/hdq/list_cmd.gox:20
 func (this *Cmd_list) Main(_xgo_arg0 string) {
 	this.Command.Main(_xgo_arg0)

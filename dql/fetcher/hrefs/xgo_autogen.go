@@ -9,13 +9,16 @@ import (
 
 const XGoPackage = "github.com/goplus/xgo/dql/html"
 const _ = true
+
 // Result represents the result of hrefs fetcher.
 type Result struct {
 	URL   string   `json:"url,omitempty"`
 	Hrefs []string `json:"hrefs,omitempty"`
 }
-//line dql/fetcher/hrefs/hrefs.xgo:30:1
+
 // New extracts hrefs from the given document and returns the Result.
+//
+//line dql/fetcher/hrefs/hrefs.xgo:30:1
 func New(input interface{}, doc html.NodeSet) Result {
 //line dql/fetcher/hrefs/hrefs.xgo:32:1
 	hrefs := func() (_xgo_ret []string) {
@@ -36,14 +39,17 @@ func New(input interface{}, doc html.NodeSet) Result {
 //line dql/fetcher/hrefs/hrefs.xgo:33:1
 	return Result{input.(string), hrefs}
 }
-//line dql/fetcher/hrefs/hrefs.xgo:36:1
+
 // URL returns the URL from the input.
 // Input is expected to be a URL, and the fetcher will extract all hrefs
 // from the page at that URL.
+//
+//line dql/fetcher/hrefs/hrefs.xgo:36:1
 func URL(input interface{}) string {
 //line dql/fetcher/hrefs/hrefs.xgo:40:1
 	return input.(string)
 }
+
 //line dql/fetcher/hrefs/hrefs.xgo:43:1
 func init() {
 //line dql/fetcher/hrefs/hrefs.xgo:44:1

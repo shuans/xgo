@@ -10,6 +10,7 @@ import (
 
 const XGoPackage = "github.com/goplus/xgo/dql/html"
 const _ = true
+
 // Repo is the information of a repository.
 type Repo struct {
 	Repo       string `json:"repo"`
@@ -19,12 +20,14 @@ type Repo struct {
 	UpdateTime string `json:"updateTime"`
 	Forks      int    `json:"forks"`
 }
+
 // Result is the result of fetching a repository list page.
 type Result struct {
 	User  string `json:"user"`
 	Repos []Repo `json:"repos"`
 	Next  string `json:"next"`
 }
+
 //line dql/fetcher/github.com/repoList/repoList.xgo:41:1
 func newRepo(node html.NodeSet) Repo {
 //line dql/fetcher/github.com/repoList/repoList.xgo:42:1
@@ -153,9 +156,11 @@ func newRepo(node html.NodeSet) Repo {
 //line dql/fetcher/github.com/repoList/repoList.xgo:50:1
 	return Repo{Repo: repo, ForkedFrom: forkedFrom, Title: title, Language: language, UpdateTime: updateTime, Forks: forks}
 }
-//line dql/fetcher/github.com/repoList/repoList.xgo:60:1
+
 // New extracts the repository information from the given HTML document and
 // returns the Result.
+//
+//line dql/fetcher/github.com/repoList/repoList.xgo:60:1
 func New(input interface{}, doc html.NodeSet) Result {
 //line dql/fetcher/github.com/repoList/repoList.xgo:63:1
 	user := input.(string)
@@ -236,14 +241,17 @@ func New(input interface{}, doc html.NodeSet) Result {
 //line dql/fetcher/github.com/repoList/repoList.xgo:68:1
 	return Result{user, repos, next}
 }
-//line dql/fetcher/github.com/repoList/repoList.xgo:71:1
+
 // URL returns the URL from the input.
 // Input is expected to be a GitHub username, and the URL will be the user's
 // repository list page.
+//
+//line dql/fetcher/github.com/repoList/repoList.xgo:71:1
 func URL(input interface{}) string {
 //line dql/fetcher/github.com/repoList/repoList.xgo:75:1
 	return "https://github.com/" + input.(string)
 }
+
 //line dql/fetcher/github.com/repoList/repoList.xgo:78:1
 func init() {
 //line dql/fetcher/github.com/repoList/repoList.xgo:79:1

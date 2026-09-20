@@ -15,10 +15,12 @@ type ift2 interface {
 	f(int) string
 	g()
 }
+
 // T doc
 type T struct {
 	io.Closer
 }
+
 //line demo/fullspec/mixgo-complex/foo.xgo:19:1
 func (T) Close() (err error) {
 //line demo/fullspec/mixgo-complex/foo.xgo:20:1
@@ -26,9 +28,11 @@ func (T) Close() (err error) {
 //line demo/fullspec/mixgo-complex/foo.xgo:21:1
 	return
 }
+
 //line demo/fullspec/mixgo-complex/foo.xgo:24:1
 func (t T) g() {
 }
+
 //line demo/fullspec/mixgo-complex/foo.xgo:26:1
 func (t T) f(a int) (b string) {
 //line demo/fullspec/mixgo-complex/foo.xgo:27:1
@@ -36,6 +40,7 @@ func (t T) f(a int) (b string) {
 //line demo/fullspec/mixgo-complex/foo.xgo:28:1
 	return
 }
+
 //line demo/fullspec/mixgo-complex/foo.xgo:31:1
 func Foo(i *impl) string {
 //line demo/fullspec/mixgo-complex/foo.xgo:32:1
@@ -45,13 +50,16 @@ func Foo(i *impl) string {
 //line demo/fullspec/mixgo-complex/foo.xgo:34:1
 	return ""
 }
-//line demo/fullspec/mixgo-complex/foo.xgo:37:1
+
 // foo golang/go#61561: interface instances aren't concurrency-safe
 // as they are not completed by the type checker.
+//
+//line demo/fullspec/mixgo-complex/foo.xgo:37:1
 func foo(a int, b int) string {
 //line demo/fullspec/mixgo-complex/foo.xgo:40:1
 	return ""
 }
+
 //line demo/fullspec/mixgo-complex/foo.xgo:43
 func main() {
 //line demo/fullspec/mixgo-complex/foo.xgo:43:1

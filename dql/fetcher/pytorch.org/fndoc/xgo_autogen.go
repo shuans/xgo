@@ -19,9 +19,11 @@ type Result struct {
 	Sig  string `json:"sig"`
 	URL  string `json:"url,omitempty"`
 }
-//line dql/fetcher/pytorch.org/fndoc/fndoc.xgo:38:1
+
 // New extracts the function declaration from the given HTML document
 // and returns the Result.
+//
+//line dql/fetcher/pytorch.org/fndoc/fndoc.xgo:38:1
 func New(input interface{}, doc html.NodeSet) Result {
 //line dql/fetcher/pytorch.org/fndoc/fndoc.xgo:41:1
 	name := input.(string)
@@ -70,14 +72,17 @@ func New(input interface{}, doc html.NodeSet) Result {
 //line dql/fetcher/pytorch.org/fndoc/fndoc.xgo:55:1
 	return Result{name, "", "", "<NULL>", url}
 }
-//line dql/fetcher/pytorch.org/fndoc/fndoc.xgo:58:1
+
 // URL returns the input URL for the given input.
 // Input is expected to be a function name, and the URL will be the function's
 // documentation page on pytorch.org.
+//
+//line dql/fetcher/pytorch.org/fndoc/fndoc.xgo:58:1
 func URL(input interface{}) string {
 //line dql/fetcher/pytorch.org/fndoc/fndoc.xgo:62:1
 	return "https://pytorch.org/docs/stable/generated/torch." + input.(string) + ".html"
 }
+
 //line dql/fetcher/pytorch.org/fndoc/fndoc.xgo:65:1
 func init() {
 //line dql/fetcher/pytorch.org/fndoc/fndoc.xgo:66:1
