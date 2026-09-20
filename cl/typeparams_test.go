@@ -874,3 +874,128 @@ func main() {
 }
 `)
 }
+
+// TestTypeParamsXGoFunc tests a generic function declared in an XGo file,
+// together with a union type set constraint.
+func TestTypeParamsXGoFunc(t *testing.T) {
+	gopMixedClTest(t, "main", `package main
+`, `
+type Num interface {
+	~int | ~float64
+}
+
+func Sum[T Num](xs []T) T {
+	var acc T
+	for _, x := range xs {
+		acc = acc + x
+	}
+	return acc
+}
+
+println(Sum([1, 2, 3]))
+`, `package main
+
+import "fmt"
+
+type Num interface {
+	interface {
+		~int | ~float64
+	}
+}
+
+func Sum[T Num](xs []T) T {
+	var acc T
+	for _, x := range xs {
+		acc = acc + x
+	}
+	return acc
+}
+func main() {
+	fmt.Println(Sum([]int{1, 2, 3}))
+}
+`)
+}
+
+// TestTypeParamsXGoType tests generic types and their instantiations declared
+// in an XGo file.
+func TestTypeParamsXGoType(t *testing.T) {
+	gopMixedClTest(t, "main", `package main
+`, `
+type Pair[T, U any] struct {
+	First  T
+	Second U
+}
+
+type IntPair = Pair[int, int]
+
+p := IntPair{First: 1, Second: 2}
+println(p.First, p.Second)
+`, `package main
+
+import "fmt"
+
+type Pair[T interface{}, U interface{}] struct {
+	First  T
+	Second U
+}
+type IntPair = Pair[int, int]
+
+func main() {
+	p := IntPair{First: 1, Second: 2}
+	fmt.Println(p.First, p.Second)
+}
+`)
+}
+
+// TestTypeParamsXGoMethod tests methods of a generic type declared in an XGo
+// file. The last method renames the type parameters of its receiver.
+func TestTypeParamsXGoMethod(t *testing.T) {
+	gopMixedClTest(t, "main", `package main
+`, `
+type Data[T any] struct {
+	v T
+}
+
+func (p *Data[T]) Set(v T) {
+	p.v = v
+}
+
+func (p *Data[T]) Get() T {
+	return p.v
+}
+
+func (p *Data[E]) Reset() E {
+	var zero E
+	p.v = zero
+	return zero
+}
+
+d := &Data[int]{}
+d.Set(42)
+println(d.Get(), d.Reset())
+`, `package main
+
+import "fmt"
+
+type Data[T interface{}] struct {
+	v T
+}
+
+func (p *Data[T]) Set(v T) {
+	p.v = v
+}
+func (p *Data[T]) Get() T {
+	return p.v
+}
+func (p *Data[T]) Reset() T {
+	var zero T
+	p.v = zero
+	return zero
+}
+func main() {
+	d := &Data[int]{}
+	d.Set(42)
+	fmt.Println(d.Get(), d.Reset())
+}
+`)
+}

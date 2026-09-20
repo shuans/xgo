@@ -3469,6 +3469,63 @@ func main() {
 	gopClTestEx(t, &conf, "main", src, expected)
 }
 
+func TestCommentHash(t *testing.T) {
+	gopClTestEx(t, gblConfLine, "main", `
+# Point is a point
+type Point struct {
+	x int
+	y int
+}
+
+# count of points
+var count = 1
+
+# Test does nothing
+func (pt *Point) Test() {
+}
+
+# testPoint is test point
+func testPoint() {
+	var pt Point
+	pt.Test()
+}
+
+# greeting
+println "hello"
+testPoint()
+`, `package main
+
+import "fmt"
+// Point is a point
+type Point struct {
+	x int
+	y int
+}
+//line /foo/bar.xgo:11:1
+// Test does nothing
+func (pt *Point) Test() {
+}
+// count of points
+var count = 1
+//line /foo/bar.xgo:15:1
+// testPoint is test point
+func testPoint() {
+//line /foo/bar.xgo:17:1
+	var pt Point
+//line /foo/bar.xgo:18:1
+	pt.Test()
+}
+//line /foo/bar.xgo:21
+// greeting
+func main() {
+//line /foo/bar.xgo:22:1
+	fmt.Println("hello")
+//line /foo/bar.xgo:23:1
+	testPoint()
+}
+`)
+}
+
 func TestRangeScope(t *testing.T) {
 	gopClTest(t, `
 ar := []int{100, 200}

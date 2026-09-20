@@ -461,6 +461,12 @@ func compileExpr(ctx *blockCtx, lhs int, expr ast.Expr, inFlags ...int) {
 		compileAnySelectorExpr(ctx, lhs, v)
 	case *ast.CondExpr:
 		compileCondExpr(ctx, v)
+	case *ast.ArrowExpr, *ast.LambdaExpr:
+		// A lambda literal carries no type information of its own: both its
+		// parameter and its result types have to be inferred from the context
+		// it appears in. Reaching here means there is no such context.
+		panic(ctx.newCodeErrorf(v.Pos(), v.End(),
+			"lambda literal needs an expected function type to infer its types; assign it to a variable of a func type or pass it to a parameter of a func type"))
 	default:
 		panic(ctx.newCodeErrorf(v.Pos(), v.End(), "compileExpr failed: unknown - %T", v))
 	}

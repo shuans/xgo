@@ -80,6 +80,36 @@ func checkStmtDoc(stmt ast.Stmt) *ast.CommentGroup {
 	return nil
 }
 
+// toGoComment returns a copy of comment whose text is valid Go source.
+// XGo accepts '#'-style line comments, but Go doesn't, so they are rewritten
+// to '//'-style before being handed over to gogen. Other comments are returned
+// as is.
+func toGoComment(comment *goast.Comment) *goast.Comment {
+	if len(comment.Text) == 0 || comment.Text[0] != '#' {
+		return comment
+	}
+	return &goast.Comment{Slash: comment.Slash, Text: "//" + comment.Text[1:]}
+}
+
+// toGoCommentGroup is like toGoComment but works on a whole comment group.
+// It returns doc itself when no conversion is needed.
+func toGoCommentGroup(doc *ast.CommentGroup) *ast.CommentGroup {
+	if doc == nil {
+		return nil
+	}
+	for i, c := range doc.List {
+		if len(c.Text) > 0 && c.Text[0] == '#' {
+			list := make([]*goast.Comment, len(doc.List))
+			copy(list, doc.List)
+			for ; i < len(list); i++ {
+				list[i] = toGoComment(list[i])
+			}
+			return &goast.CommentGroup{List: list}
+		}
+	}
+	return doc
+}
+
 func commentFunc(ctx *blockCtx, fn *gogen.Func, decl *ast.FuncDecl) {
 	start := decl.Name.Pos()
 	if ctx.fileLine && start != token.NoPos {
@@ -98,12 +128,12 @@ func commentFunc(ctx *blockCtx, fn *gogen.Func, decl *ast.FuncDecl) {
 		}
 		doc := &goast.CommentGroup{}
 		doc.List = append(doc.List, &goast.Comment{Text: line})
-		if decl.Doc != nil {
-			doc.List = append(doc.List, decl.Doc.List...)
+		if doc0 := toGoCommentGroup(decl.Doc); doc0 != nil {
+			doc.List = append(doc.List, doc0.List...)
 		}
 		fn.SetComments(ctx.pkg, doc)
 	} else if decl.Doc != nil {
-		fn.SetComments(ctx.pkg, decl.Doc)
+		fn.SetComments(ctx.pkg, toGoCommentGroup(decl.Doc))
 	}
 }
 

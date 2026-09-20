@@ -178,7 +178,7 @@ func (p *parser) declare(decl, data any, scope *ast.Scope, kind ast.ObjKind, ide
 		obj.Decl = decl
 		obj.Data = data
 		ident.Obj = obj
-		if ident.Name != "_" {
+		if ident.Name != "_" && scope != nil {
 			if alt := scope.Insert(obj); alt != nil && p.mode&DeclarationErrors != 0 {
 				prevDecl := ""
 				if pos := alt.Pos(); pos.IsValid() {
@@ -384,7 +384,7 @@ func (p *parser) next() {
 		var comment *ast.CommentGroup
 		var endline int
 
-		if p.file.Line(p.pos) == p.file.Line(prev) || p.lit[0] == '#' {
+		if p.file.Line(p.pos) == p.file.Line(prev) {
 			// The comment is on same line as the previous token; it
 			// cannot be a lead comment but may be a line comment.
 			comment, endline = p.consumeCommentGroup(0)
@@ -1404,6 +1404,31 @@ func (p *parser) parseResult(scope *ast.Scope) *ast.FieldList {
 	return nil
 }
 
+// parseTypeParams parses the type parameter list of a generic function or
+// type declaration, e.g. `[T any]` or `[S ~[]E, E any]`. It returns nil when
+// the current token isn't '['.
+func (p *parser) parseTypeParams() *ast.FieldList {
+	if p.trace {
+		defer un(trace(p, "TypeParams"))
+	}
+
+	if p.tok != token.LBRACK {
+		return nil
+	}
+	lbrack := p.expect(token.LBRACK)
+	var list []*ast.Field
+	if p.tok != token.RBRACK && p.tok != token.EOF {
+		list = p.parseParameterList(nil, nil, nil, token.RBRACK)
+	}
+	rbrack := p.expect(token.RBRACK)
+
+	if len(list) == 0 {
+		// `[T any](...)` error is reported by the caller
+		return &ast.FieldList{Opening: lbrack, Closing: rbrack}
+	}
+	return &ast.FieldList{Opening: lbrack, List: list, Closing: rbrack}
+}
+
 func (p *parser) parseSignature(scope *ast.Scope) (params, results *ast.FieldList) {
 	if p.trace {
 		defer un(trace(p, "Signature"))
@@ -1447,12 +1472,60 @@ func (p *parser) parseMethodSpec(scope *ast.Scope) *ast.Field {
 		typ = x
 		p.resolve(typ)
 	}
-	p.expectSemi() // call before accessing p.linecomment
 
-	spec := &ast.Field{Doc: doc, Names: idents, Type: typ, Comment: p.lineComment}
+	// NOTE: the terminating semicolon and the line comment are handled by the
+	// caller (parseInterfaceType), because an embedded element may still be
+	// followed by '|' type terms.
+	spec := &ast.Field{Doc: doc, Names: idents, Type: typ}
 	p.declare(spec, nil, scope, ast.Fun, idents...)
 
 	return spec
+}
+
+// embeddedElem parses the remainder of an embedded element, i.e. the optional
+// '|' separated type terms of a union type set. x is the first term already
+// parsed, or nil if nothing has been parsed yet.
+func (p *parser) embeddedElem(x ast.Expr) ast.Expr {
+	if p.trace {
+		defer un(trace(p, "EmbeddedElem"))
+	}
+	if x == nil {
+		x = p.embeddedTerm()
+	}
+	for p.tok == token.OR {
+		t := new(ast.BinaryExpr)
+		t.OpPos = p.pos
+		t.Op = token.OR
+		p.next()
+		t.X = x
+		t.Y = p.embeddedTerm()
+		x = t
+	}
+	return x
+}
+
+func (p *parser) embeddedTerm() ast.Expr {
+	if p.trace {
+		defer un(trace(p, "EmbeddedTerm"))
+	}
+	if p.tok == token.TILDE {
+		t := new(ast.UnaryExpr)
+		t.OpPos = p.pos
+		t.Op = token.TILDE
+		p.next()
+		t.X = p.parseType()
+		return t
+	}
+
+	t, _ := p.tryIdentOrType(0, nil)
+	if t == nil {
+		pos := p.pos
+		p.errorExpected(pos, "~ term or type", 2)
+		p.advance(exprEnd)
+		return &ast.BadExpr{From: pos, To: p.pos}
+	}
+
+	return t
 }
 
 func (p *parser) parseInterfaceType() *ast.InterfaceType {
@@ -1464,8 +1537,31 @@ func (p *parser) parseInterfaceType() *ast.InterfaceType {
 	lbrace := p.expect(token.LBRACE)
 	scope := ast.NewScope(nil) // interface scope
 	var list []*ast.Field
-	for p.tok == token.IDENT {
-		list = append(list, p.parseMethodSpec(scope))
+
+parseElements:
+	for {
+		switch {
+		case p.tok == token.IDENT:
+			f := p.parseMethodSpec(scope)
+			if f.Names == nil {
+				f.Type = p.embeddedElem(f.Type)
+			}
+			p.expectSemi() // call before accessing p.lineComment
+			f.Comment = p.lineComment
+			list = append(list, f)
+		case p.tok == token.TILDE:
+			typ := p.embeddedElem(nil)
+			p.expectSemi()
+			list = append(list, &ast.Field{Type: typ, Comment: p.lineComment})
+		default:
+			if t, _ := p.tryIdentOrType(0, nil); t != nil {
+				typ := p.embeddedElem(t)
+				p.expectSemi()
+				list = append(list, &ast.Field{Type: typ, Comment: p.lineComment})
+			} else {
+				break parseElements
+			}
+		}
 	}
 	rbrace := p.expect(token.RBRACE)
 
@@ -4140,6 +4236,13 @@ func (p *parser) parseTypeSpec(doc *ast.CommentGroup, _ token.Token, _ int) ast.
 	// (Global identifiers are resolved in a separate phase after parsing.)
 	spec := &ast.TypeSpec{Doc: doc, Name: ident}
 	p.declare(spec, nil, p.topScope, ast.Typ, ident)
+	if p.tok == token.LBRACK {
+		// spec.Name "[" ... : an array/slice type or a type parameter list
+		p.parseArrayOrTypeParams(spec)
+		p.expectSemi() // call before accessing p.linecomment
+		spec.Comment = p.lineComment
+		return spec
+	}
 	if p.tok == token.ASSIGN {
 		spec.Assign = p.pos
 		p.next()
@@ -4160,6 +4263,158 @@ func (p *parser) parseTypeSpec(doc *ast.CommentGroup, _ token.Token, _ int) ast.
 	spec.Comment = p.lineComment
 
 	return spec
+}
+
+// parseArrayOrTypeParams parses what follows `type Name [`, which is either an
+// array/slice type (e.g. `type A [2]int`) or a type parameter list (e.g.
+// `type A[T any] ...`). It sets spec.Type or spec.TypeParams accordingly.
+//
+// The two forms are ambiguous: `type A [N]int` declares an array whose length
+// is N, while `type A[T any] ...` declares a generic type. As in the Go parser,
+// a name followed by ']' is taken as an array length, while a name followed by
+// anything else (a type term, a comma, a '~' term, ...) starts a type parameter
+// list.
+func (p *parser) parseArrayOrTypeParams(spec *ast.TypeSpec) {
+	lbrack := p.pos
+	p.next()
+	if p.tok != token.IDENT {
+		// array or slice type
+		spec.Type = p.parseArrayType(lbrack, nil)
+		return
+	}
+
+	// We may have an array type or a type parameter list. In either case we
+	// expect an expression x (which may just be a name, or a more complex
+	// expression) which we can analyze further.
+	//
+	// A type parameter list may have a type bound starting with "[", as in
+	// "T []E". In that case parsing an expression would fail, because "T[]" is
+	// invalid. But since index or slice expressions are never constant and thus
+	// invalid array length expressions, if the name is followed by "[" it must
+	// be the start of an array or slice constraint. Only if we don't see a "["
+	// do we need to parse a full expression.
+	namePos, nameLit := p.pos, p.lit
+	var x ast.Expr = p.parseIdent()
+	if p.tok != token.LBRACK {
+		// Rewind to the name and parse the whole expression from scratch, so
+		// that operators are included: "N + 1" is an array length, whereas
+		// "T *E" is a constraint.
+		p.unget(namePos, token.IDENT, nameLit)
+		p.exprLev++
+		x, _ = p.parseBinaryExpr(token.LowestPrec+1, 0)
+		p.exprLev--
+	}
+
+	// Analyze expression x. If we can split x into a type parameter name,
+	// possibly followed by a type parameter type, we consider this the start of
+	// a type parameter list. A single name followed by "]" tilts the decision
+	// towards an array declaration.
+	if name, typ := extractName(x, p.tok == token.COMMA); name != nil && (typ != nil || p.tok != token.RBRACK) {
+		// The name was parsed as part of a trial expression above and may have
+		// been resolved in the process. It is a type parameter name about to be
+		// declared, so drop any resolution result.
+		name.Obj = nil
+		list := p.parseParameterList(nil, name, typ, token.RBRACK)
+		rbrack := p.expect(token.RBRACK)
+		spec.TypeParams = &ast.FieldList{Opening: lbrack, List: list, Closing: rbrack}
+		if p.tok == token.ASSIGN {
+			spec.Assign = p.pos
+			p.next()
+		}
+		spec.Type = p.parseType()
+		return
+	}
+	spec.Type = p.parseArrayType(lbrack, x)
+}
+
+// parseArrayType parses the remainder of an array type whose '[' has already
+// been consumed. length is the already-parsed length expression, or nil if it
+// still needs to be parsed.
+func (p *parser) parseArrayType(lbrack token.Pos, length ast.Expr) ast.Expr {
+	if length == nil {
+		p.exprLev++
+		// always permit ellipsis for more fault-tolerant parsing
+		if p.tok == token.ELLIPSIS {
+			length = &ast.Ellipsis{Ellipsis: p.pos}
+			p.next()
+		} else if p.tok != token.RBRACK {
+			length = p.parseRHS()
+		}
+		p.exprLev--
+	}
+	p.expect(token.RBRACK)
+	elt := p.parseType()
+	if debugParseOutput {
+		log.Printf("ast.ArrayType{Len: %v, Elt: %v}\n", length, elt)
+	}
+	return &ast.ArrayType{Lbrack: lbrack, Len: length, Elt: elt}
+}
+
+// extractName splits the expression x into (name, expr) if syntactically x can
+// be written as name expr. The split only happens if expr is a type element
+// (per the isTypeElem predicate) or if force is set. If x is just a name, the
+// result is (name, nil). If the split succeeds, the result is (name, expr).
+// Otherwise the result is (nil, x).
+//
+//	x           force    name    expr
+//	------------------------------------
+//	P*[]int     T/F      P       *[]int
+//	P*E         T        P       *E
+//	P*E         F        nil     P*E
+//	P([]int)    T/F      P       ([]int)
+//	P(E)        T        P       (E)
+//	P(E)        F        nil     P(E)
+//	P*E|F|~G    T/F      P       *E|F|~G
+//	P*E|F|G     T        P       *E|F|G
+//	P*E|F|G     F        nil     P*E|F|G
+func extractName(x ast.Expr, force bool) (*ast.Ident, ast.Expr) {
+	switch x := x.(type) {
+	case *ast.Ident:
+		return x, nil
+	case *ast.BinaryExpr:
+		switch x.Op {
+		case token.MUL:
+			if name, _ := x.X.(*ast.Ident); name != nil && (force || isTypeElem(x.Y)) {
+				// x = name *x.Y
+				return name, &ast.StarExpr{Star: x.OpPos, X: x.Y}
+			}
+		case token.OR:
+			if name, lhs := extractName(x.X, force || isTypeElem(x.Y)); name != nil && lhs != nil {
+				// x = name lhs|x.Y
+				op := *x
+				op.X = lhs
+				return name, &op
+			}
+		}
+	case *ast.CallExpr:
+		if name, _ := x.Fun.(*ast.Ident); name != nil && len(x.Kwargs) == 0 {
+			if len(x.Args) == 1 && x.Ellipsis == token.NoPos && (force || isTypeElem(x.Args[0])) {
+				// x = name (x.Args[0])
+				return name, &ast.ParenExpr{
+					Lparen: x.Lparen,
+					X:      x.Args[0],
+					Rparen: x.Rparen,
+				}
+			}
+		}
+	}
+	return nil, x
+}
+
+// isTypeElem reports whether x is a (possibly parenthesized) type element
+// expression. The result is false if x is invalid.
+func isTypeElem(x ast.Expr) bool {
+	switch x := x.(type) {
+	case *ast.ArrayType, *ast.StructType, *ast.FuncType, *ast.InterfaceType, *ast.MapType, *ast.ChanType:
+		return true
+	case *ast.BinaryExpr:
+		return isTypeElem(x.X) || isTypeElem(x.Y)
+	case *ast.UnaryExpr:
+		return x.Op == token.TILDE
+	case *ast.ParenExpr:
+		return isTypeElem(x.X)
+	}
+	return false
 }
 
 // parseEnumType parses `const ( ValueSpec... )` as an EnumType expression
@@ -4295,6 +4550,7 @@ func (p *parser) parseFuncDeclOrCall(decs []*ast.FuncDecorator) (ast.Decl, *ast.
 	scope := ast.NewScope(p.topScope) // function scope
 
 	var recv, params, results *ast.FieldList
+	var typeParams *ast.FieldList
 	var ident *ast.Ident
 	var isOp, isStatic, isFunLit, ok bool
 
@@ -4393,6 +4649,11 @@ func (p *parser) parseFuncDeclOrCall(decs []*ast.FuncDecorator) (ast.Decl, *ast.
 				isStatic = true
 			}
 		}
+		if recv == nil && !isOp {
+			// A method gets its type parameters from its receiver, so a type
+			// parameter list is only allowed on a plain function here.
+			typeParams = p.parseTypeParams()
+		}
 		params, results = p.parseSignature(scope)
 	}
 
@@ -4424,9 +4685,10 @@ func (p *parser) parseFuncDeclOrCall(decs []*ast.FuncDecorator) (ast.Decl, *ast.
 		Recv:       recv,
 		Name:       ident,
 		Type: &ast.FuncType{
-			Func:    pos,
-			Params:  params,
-			Results: results,
+			Func:       pos,
+			TypeParams: typeParams,
+			Params:     params,
+			Results:    results,
 		},
 		Body:     body,
 		Operator: isOp,

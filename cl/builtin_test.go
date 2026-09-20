@@ -449,7 +449,7 @@ func TestErrAssign(t *testing.T) {
 func TestErrPanicToRecv(t *testing.T) {
 	ctx := &blockCtx{
 		tlookup: &typeParamLookup{
-			[]*types.TypeParam{
+			typeParams: []*types.TypeParam{
 				types.NewTypeParam(types.NewTypeName(0, nil, "t", nil), nil),
 			},
 		},

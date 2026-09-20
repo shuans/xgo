@@ -45,6 +45,22 @@ func TestErrTplLit(t *testing.T) {
 	want (interface{})`, "tpl`a = INT => { return }`")
 }
 
+func TestErrLambdaNoExpectedType(t *testing.T) {
+	// A lambda literal has no type of its own; without a context that provides
+	// an expected func type the compiler can't infer anything. The error should
+	// say so instead of leaking an internal node type name.
+	const msg = "lambda literal needs an expected function type to infer its types; " +
+		"assign it to a variable of a func type or pass it to a parameter of a func type"
+	codeErrorTest(t, `bar.xgo:1:6: `+msg, `f := () => 42
+`)
+	codeErrorTest(t, `bar.xgo:2:6: `+msg, `
+f := => 42
+`)
+	codeErrorTest(t, `bar.xgo:2:6: `+msg, `
+f := x => { return x * 2 }
+`)
+}
+
 func TestErrSendStmt(t *testing.T) {
 	codeErrorTest(t, `bar.xgo:3:7: can't send multiple values to a channel`, `
 	var a chan int

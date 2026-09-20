@@ -19,6 +19,7 @@ package cl
 import (
 	"go/types"
 
+	"github.com/goplus/gogen"
 	"github.com/goplus/xgo/ast"
 	"github.com/goplus/xgo/token"
 )
@@ -58,11 +59,133 @@ func toTypeParams(ctx *blockCtx, params *ast.FieldList) []*types.TypeParam {
 	return collectTypeParams(ctx, params)
 }
 
-func recvTypeParams(ctx *blockCtx, typ ast.Expr, named *types.Named) (tparams []*types.TypeParam) {
+func toFuncType(ctx *blockCtx, typ *ast.FuncType, recv *types.Var, d *ast.FuncDecl) *types.Signature {
+	var typeParams []*types.TypeParam
+	var lookup *typeParamLookup
+	if recv != nil && d != nil && d.Recv != nil {
+		astRecv := d.Recv.List[0].Type
+		recv, typeParams = toMethodRecv(ctx, recv, astRecv)
+		if len(typeParams) > 0 {
+			lookup = methodTypeParamLookup(astRecv, typeParams)
+		}
+	} else {
+		typeParams = toTypeParams(ctx, typ.TypeParams)
+		if len(typeParams) > 0 {
+			lookup = &typeParamLookup{typeParams: typeParams}
+		}
+	}
+	if lookup != nil {
+		ctx.tlookup = lookup
+		defer func() {
+			ctx.tlookup = nil
+		}()
+	}
+	params, variadic := toParams(ctx, typ.Params.List)
+	results := toResults(ctx, typ.Results)
+	if recv != nil {
+		return types.NewSignatureType(recv, typeParams, nil, params, results, variadic)
+	}
+	return types.NewSignatureType(recv, nil, typeParams, params, results, variadic)
+}
+
+// methodTypeParamLookup returns the lookup that resolves the type parameter
+// names used inside a method. The receiver may spell them differently from the
+// type declaration, so the names of the receiver are resolved as well.
+func methodTypeParamLookup(astRecv ast.Expr, tparams []*types.TypeParam) *typeParamLookup {
+	return &typeParamLookup{
+		typeParams: tparams,
+		aliases:    recvTypeParamAliases(astRecv, tparams),
+	}
+}
+
+// toMethodRecv returns a method's receiver together with the type parameters of
+// the method.
+//
+// For a method of a generic type the receiver is the base type instantiated
+// with those type parameters. That is what go/types does, and it is what makes
+// the receiver usable: `p.v` then has the type of the type parameter, the same
+// type as a parameter declared as `T`, and a call on an instantiated type is
+// substituted correctly because the signature carries the type parameters that
+// the instantiation replaces.
+func toMethodRecv(ctx *blockCtx, recv *types.Var, astRecv ast.Expr) (*types.Var, []*types.TypeParam) {
+	t := recv.Type()
+	ptr, _ := t.(*types.Pointer)
+	if ptr != nil {
+		t = ptr.Elem()
+	}
+	named, ok := t.(*types.Named)
+	if !ok {
+		return recv, nil
+	}
+	typeParams := recvTypeParams(ctx, astRecv, named)
+	if len(typeParams) == 0 {
+		return recv, nil
+	}
+	args := make([]types.Type, len(typeParams))
+	for i, tp := range typeParams {
+		args[i] = tp
+	}
+	inst := ctx.pkg.Instantiate(named, args, astRecv)
+	if ptr != nil {
+		inst = types.NewPointer(inst)
+	}
+	return types.NewVar(recv.Pos(), recv.Pkg(), recv.Name(), inst), typeParams
+}
+
+// recvTypeParams returns the type parameters declared by the receiver of a
+// method. They are fresh objects, exactly as in go/types, where a method
+// declares its own type parameters and only borrows the bounds from the
+// receiver's base type. They carry the names of the type declaration, which is
+// what the receiver is emitted with; a receiver that spells them differently is
+// handled by recvTypeParamAliases.
+//
+// The type's own type parameters cannot be reused here: they are already bound
+// to the type, and binding them a second time panics.
+func recvTypeParams(ctx *blockCtx, typ ast.Expr, named *types.Named) []*types.TypeParam {
 	orgTypeParams := named.TypeParams()
 	if orgTypeParams == nil {
 		return nil
 	}
+	base, indices := recvBase(typ)
+	if indices == nil {
+		panic(ctx.newCodeErrorf(base.Pos(), base.End(), "cannot use generic type %v without instantiation", named))
+	}
+	if len(indices) != orgTypeParams.Len() {
+		if _, ok := base.(*ast.IndexExpr); ok {
+			panic(ctx.newCodeErrorf(base.Pos(), base.End(), "got 1 type parameter, but receiver base type declares %v", orgTypeParams.Len()))
+		}
+		panic(ctx.newCodeErrorf(base.Pos(), base.End(), "got %v arguments but %v type parameters", len(indices), orgTypeParams.Len()))
+	}
+	tparams := make([]*types.TypeParam, len(indices))
+	for i := range indices {
+		tp := orgTypeParams.At(i)
+		obj := types.NewTypeName(tp.Obj().Pos(), tp.Obj().Pkg(), tp.Obj().Name(), nil)
+		tparams[i] = types.NewTypeParam(obj, types.Typ[types.Invalid])
+	}
+	// Re-resolve the constraints of the type with the new type parameters in
+	// scope. A constraint may refer to a sibling type parameter, e.g.
+	// `type Slice[S sliceOf[T], T any]`, and it has to refer to the type
+	// parameter of the method for the receiver to be a valid instantiation.
+	if spec := typeSpecOf(ctx, named); spec != nil && spec.TypeParams != nil {
+		setTypeParamConstraints(ctx, spec.TypeParams, tparams)
+	}
+	return tparams
+}
+
+// typeSpecOf returns the declaration of a type of the package being compiled.
+func typeSpecOf(ctx *blockCtx, named *types.Named) *ast.TypeSpec {
+	if sym, ok := ctx.syms[named.Obj().Name()]; ok {
+		if ld, ok := sym.(*typeLoader); ok {
+			return ld.spec
+		}
+	}
+	return nil
+}
+
+// recvBase returns a receiver type with its parentheses and pointer stripped,
+// together with the type arguments it is written with, e.g. the `E` of
+// `*Data[E]`. The type arguments are nil if the receiver has none.
+func recvBase(typ ast.Expr) (ast.Expr, []ast.Expr) {
 L:
 	for {
 		switch t := typ.(type) {
@@ -76,61 +199,133 @@ L:
 	}
 	switch t := typ.(type) {
 	case *ast.IndexExpr:
-		if orgTypeParams.Len() != 1 {
-			panic(ctx.newCodeErrorf(typ.Pos(), typ.End(), "got 1 type parameter, but receiver base type declares %v", orgTypeParams.Len()))
-		}
-		v := t.Index.(*ast.Ident)
-		tp := orgTypeParams.At(0)
-		obj := types.NewTypeName(v.Pos(), tp.Obj().Pkg(), v.Name, nil)
-		tparams = []*types.TypeParam{types.NewTypeParam(obj, tp.Constraint())}
+		return typ, []ast.Expr{t.Index}
 	case *ast.IndexListExpr:
-		n := len(t.Indices)
-		if n != orgTypeParams.Len() {
-			panic(ctx.newCodeErrorf(typ.Pos(), typ.End(), "got %v arguments but %v type parameters", n, orgTypeParams.Len()))
-		}
-		tparams = make([]*types.TypeParam, n)
-		for i := 0; i < n; i++ {
-			v := t.Indices[i].(*ast.Ident)
-			tp := orgTypeParams.At(i)
-			obj := types.NewTypeName(v.Pos(), tp.Obj().Pkg(), v.Name, nil)
-			tparams[i] = types.NewTypeParam(obj, tp.Constraint())
-		}
-	default:
-		panic(ctx.newCodeErrorf(typ.Pos(), typ.End(), "cannot use generic type %v without instantiation", named))
+		return typ, t.Indices
 	}
-	return
+	return typ, nil
 }
 
-func toFuncType(ctx *blockCtx, typ *ast.FuncType, recv *types.Var, d *ast.FuncDecl) *types.Signature {
-	var typeParams []*types.TypeParam
-	if recv != nil && d.Recv != nil {
-		typ := recv.Type()
-		if pt, ok := typ.(*types.Pointer); ok {
-			typ = pt.Elem()
+// recvTypeParamAliases returns the names that a receiver gives to the type
+// parameters of its method. A receiver may rename them, as in
+// `func (p *Data[E]) Get() E` for a type declared as `Data[T]`, and the method
+// then refers to them by the names of the receiver. Those names are mapped to
+// the type parameters of the signature, which carry the names of the type
+// declaration. It returns nil if no name differs.
+func recvTypeParamAliases(typ ast.Expr, tparams []*types.TypeParam) map[string]*types.TypeParam {
+	_, indices := recvBase(typ)
+	if len(indices) != len(tparams) {
+		return nil
+	}
+	var aliases map[string]*types.TypeParam
+	for i, index := range indices {
+		id, ok := index.(*ast.Ident)
+		if !ok {
+			continue
 		}
-		typeParams = recvTypeParams(ctx, d.Recv.List[0].Type, typ.(*types.Named))
+		if tp := tparams[i]; id.Name != tp.Obj().Name() {
+			if aliases == nil {
+				aliases = make(map[string]*types.TypeParam)
+			}
+			aliases[id.Name] = tp
+		}
+	}
+	return aliases
+}
+
+// newFunc creates the gogen function of a declaration, which is a method when
+// sig has a receiver.
+//
+// A method of a generic type needs special care. Its receiver is an
+// instantiation, but gogen registers the method on the type of the receiver and
+// types.Named.AddMethod refuses a type that has type arguments. The method is
+// therefore registered here on the base generic type first, and gogen is handed
+// a receiver without type arguments so that its own registration becomes a
+// no-op. The function object is then replaced by the registered one, so that
+// the body sees the instantiated receiver.
+func newFunc(ctx *blockCtx, pos token.Pos, name string, sig *types.Signature, recvTypePos func() token.Pos) (*gogen.Func, error) {
+	if recv := sig.Recv(); recv != nil && name != "_" {
+		if base, ok := genericBase(recv.Type()); ok {
+			fn := types.NewFunc(pos, ctx.pkg.Types, name, sig)
+			base.AddMethod(fn)
+			safe, err := ctx.pkg.NewFuncWith(pos, name, genericRecvSig(recv, sig), recvTypePos)
+			if err != nil {
+				return nil, err
+			}
+			safe.Func = fn
+			return safe, nil
+		}
+	}
+	return ctx.pkg.NewFuncWith(pos, name, sig, recvTypePos)
+}
+
+// genericBase returns the generic type that typ was instantiated from. It
+// reports false if typ is not an instantiated named type.
+func genericBase(typ types.Type) (*types.Named, bool) {
+	if ptr, _ := typ.(*types.Pointer); ptr != nil {
+		typ = ptr.Elem()
+	}
+	named, ok := typ.(*types.Named)
+	if !ok || named.TypeArgs() == nil {
+		return nil, false
+	}
+	return named.Origin(), true
+}
+
+// genericRecvSig returns sig with its receiver replaced by the generic type the
+// receiver was instantiated from.
+func genericRecvSig(recv *types.Var, sig *types.Signature) *types.Signature {
+	typ := recv.Type()
+	if ptr, _ := typ.(*types.Pointer); ptr != nil {
+		typ = types.NewPointer(ptr.Elem().(*types.Named).Origin())
 	} else {
-		typeParams = toTypeParams(ctx, typ.TypeParams)
+		typ = typ.(*types.Named).Origin()
 	}
-	if len(typeParams) > 0 {
-		ctx.tlookup = &typeParamLookup{typeParams}
-		defer func() {
-			ctx.tlookup = nil
-		}()
+	base := types.NewVar(recv.Pos(), recv.Pkg(), recv.Name(), typ)
+	return types.NewSignatureType(base, nil, nil, sig.Params(), sig.Results(), sig.Variadic())
+}
+
+// setTypeParamLookup makes the type parameters of sig visible through
+// ctx.tlookup, so that the body of a generic function or method can refer to
+// them. The type parameters of a function live in sig.TypeParams(); those of a
+// method come from its receiver (sig.RecvTypeParams()), and the receiver may
+// rename them. src is the declaration the body belongs to. It reports whether
+// ctx.tlookup was changed.
+func setTypeParamLookup(ctx *blockCtx, sig *types.Signature, src ast.Node) bool {
+	tparams := sig.RecvTypeParams()
+	recvParams := tparams != nil && tparams.Len() > 0
+	if !recvParams {
+		tparams = sig.TypeParams()
 	}
-	params, variadic := toParams(ctx, typ.Params.List)
-	results := toResults(ctx, typ.Results)
-	if recv != nil {
-		return types.NewSignatureType(recv, typeParams, nil, params, results, variadic)
+	if tparams == nil || tparams.Len() == 0 {
+		return false
 	}
-	return types.NewSignatureType(recv, nil, typeParams, params, results, variadic)
+	list := make([]*types.TypeParam, tparams.Len())
+	for i := range list {
+		list[i] = tparams.At(i)
+	}
+	var lookup *typeParamLookup
+	if recvParams {
+		if d, ok := src.(*ast.FuncDecl); ok && d.Recv != nil && len(d.Recv.List) > 0 {
+			lookup = methodTypeParamLookup(d.Recv.List[0].Type, list)
+		}
+	}
+	if lookup == nil {
+		lookup = &typeParamLookup{typeParams: list}
+	}
+	ctx.tlookup = lookup
+	return true
 }
 
 type typeParamLookup struct {
 	typeParams []*types.TypeParam
+	aliases    map[string]*types.TypeParam
 }
 
 func (p *typeParamLookup) Lookup(name string) *types.TypeParam {
+	if t, ok := p.aliases[name]; ok {
+		return t
+	}
 	for _, t := range p.typeParams {
 		tname := t.Obj().Name()
 		if tname != "_" && name == tname {
@@ -144,7 +339,7 @@ func initType(ctx *blockCtx, named *types.Named, spec *ast.TypeSpec) {
 	typeParams := toTypeParams(ctx, spec.TypeParams)
 	if len(typeParams) > 0 {
 		named.SetTypeParams(typeParams)
-		ctx.tlookup = &typeParamLookup{typeParams}
+		ctx.tlookup = &typeParamLookup{typeParams: typeParams}
 		defer func() {
 			ctx.tlookup = nil
 		}()
@@ -202,8 +397,15 @@ func collectTypeParams(ctx *blockCtx, list *ast.FieldList) []*types.TypeParam {
 	for _, f := range list.List {
 		tparams = declareTypeParams(ctx, tparams, f.Names)
 	}
+	setTypeParamConstraints(ctx, list, tparams)
+	return tparams
+}
 
-	ctx.tlookup = &typeParamLookup{tparams}
+// setTypeParamConstraints sets the constraint of each type parameter of list.
+// The constraints are resolved with all of tparams in scope, so that they may
+// refer to each other.
+func setTypeParamConstraints(ctx *blockCtx, list *ast.FieldList, tparams []*types.TypeParam) {
+	ctx.tlookup = &typeParamLookup{typeParams: tparams}
 	defer func() {
 		ctx.tlookup = nil
 	}()
@@ -235,7 +437,6 @@ func collectTypeParams(ctx *blockCtx, list *ast.FieldList) []*types.TypeParam {
 		}
 		index += len(f.Names)
 	}
-	return tparams
 }
 
 func declareTypeParams(ctx *blockCtx, tparams []*types.TypeParam, names []*ast.Ident) []*types.TypeParam {

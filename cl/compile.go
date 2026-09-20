@@ -406,6 +406,7 @@ type typeLoader struct {
 	typ, typInit func()
 	methods      []func()
 	at           ast.Node
+	spec         *ast.TypeSpec // the declaration, when it is a type declaration
 }
 
 func getTypeLoader(ctx *pkgCtx, syms map[string]loader, at ast.Node, name string) *typeLoader {
@@ -1288,6 +1289,7 @@ func preloadFile(p *gogen.Package, ctx *blockCtx, f *ast.File, goFile string, ge
 						log.Println("==> Preload type", name)
 					}
 					ld := getTypeLoader(parent, syms, tName, name)
+					ld.spec = t
 					defs := ctx.pkg.NewTypeDefs()
 					if goFile != skippingGoFile { // is XGo file
 						enumType, ok := t.Type.(*ast.EnumType)
@@ -1317,25 +1319,43 @@ func preloadFile(p *gogen.Package, ctx *blockCtx, f *ast.File, goFile string, ge
 							}
 							decl := defs.NewType(name, tName)
 							if t.Doc != nil {
-								defs.SetComments(t.Doc)
+								defs.SetComments(toGoCommentGroup(t.Doc))
 							} else if d.Doc != nil {
-								defs.SetComments(d.Doc)
+								defs.SetComments(toGoCommentGroup(d.Doc))
 							}
-							ld.typInit = func() { // decycle
-								if debugLoad {
-									log.Println("==> Load > InitType", name)
-								}
-								var underlying types.Type
-								if enumType != nil {
-									underlying = inferEnumUnderlyingType(ctx, enumType)
-								} else {
-									underlying = toType(ctx, t.Type)
-								}
-								typ := decl.InitType(ctx.pkg, underlying)
-								if rec := ctx.recorder(); rec != nil {
-									rec.Def(tName, typ.Obj())
-								}
+						ld.typInit = func() { // decycle
+							if debugLoad {
+								log.Println("==> Load > InitType", name)
 							}
+							// Type parameters must be visible while converting the
+							// underlying type, and must be handed to InitType so
+							// that gogen can emit them.
+							var typeParams []*types.TypeParam
+							if t.TypeParams != nil {
+								typeParams = toTypeParams(ctx, t.TypeParams)
+							}
+							if len(typeParams) > 0 {
+								ctx.tlookup = &typeParamLookup{typeParams: typeParams}
+								defer func() {
+									ctx.tlookup = nil
+								}()
+								org := ctx.inInst
+								ctx.inInst = 0
+								defer func() {
+									ctx.inInst = org
+								}()
+							}
+							var underlying types.Type
+							if enumType != nil {
+								underlying = inferEnumUnderlyingType(ctx, enumType)
+							} else {
+								underlying = toType(ctx, t.Type)
+							}
+							typ := decl.InitType(ctx.pkg, underlying, typeParams...)
+							if rec := ctx.recorder(); rec != nil {
+								rec.Def(tName, typ.Obj())
+							}
+						}
 						}
 					} else {
 						ctx.generics[name] = true
@@ -1587,7 +1607,7 @@ func aliasType(ctx *blockCtx, pkg *types.Package, pos token.Pos, name string, t 
 	var typeParams []*types.TypeParam
 	if t.TypeParams != nil {
 		typeParams = toTypeParams(ctx, t.TypeParams)
-		ctx.tlookup = &typeParamLookup{typeParams}
+		ctx.tlookup = &typeParamLookup{typeParams: typeParams}
 		defer func() {
 			ctx.tlookup = nil
 		}()
@@ -1771,7 +1791,7 @@ func loadFunc(ctx *blockCtx, recv *types.Var, name string, d *ast.FuncDecl, genB
 	if sig == nil {
 		sig = toFuncType(ctx, d.Type, recv, d)
 	}
-	fn, err := pkg.NewFuncWith(d.Name.Pos(), name, sig, func() token.Pos {
+	fn, err := newFunc(ctx, d.Name.Pos(), name, sig, func() token.Pos {
 		return d.Recv.List[0].Type.Pos()
 	})
 	if err != nil {
@@ -1869,6 +1889,14 @@ func shouldCallXGoInit(recv *types.Var) bool {
 }
 
 func loadFuncBody(ctx *blockCtx, fn *gogen.Func, body *ast.BlockStmt, sigBase *types.Signature, src ast.Node, initClass bool) {
+	if sig, ok := fn.Type().(*types.Signature); ok {
+		old := ctx.tlookup
+		if setTypeParamLookup(ctx, sig, src) {
+			defer func() {
+				ctx.tlookup = old
+			}()
+		}
+	}
 	cb := fn.BodyStart(ctx.pkg, body)
 	cb.SetComments(nil, false)
 	if initClass {
@@ -2020,7 +2048,7 @@ func loadVars(ctx *blockCtx, v *ast.ValueSpec, doc *ast.CommentGroup, global boo
 	} else {
 		scope = ctx.cb.Scope()
 	}
-	varDefs := ctx.pkg.NewVarDefs(scope).SetComments(doc)
+	varDefs := ctx.pkg.NewVarDefs(scope).SetComments(toGoCommentGroup(doc))
 	initExpr := makeInitExpr(ctx, v, typ, names)
 	varDefs.NewAndInit(initExpr, v.Names[0].Pos(), typ, names...)
 	defNames(ctx, v.Names, scope)

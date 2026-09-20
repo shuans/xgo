@@ -367,6 +367,91 @@ func TestParseFieldDecl(t *testing.T) {
 	p.parseFieldDecl(nil)
 }
 
+func TestCommentHashStyle(t *testing.T) {
+	// '#'-style line comments are equivalent to '//'-style ones, so they must
+	// be grouped and attached to declarations in exactly the same way. Before
+	// this was fixed, the first line of a '#'-comment block was classified as
+	// a line comment (and thus dropped) and only the last line survived as the
+	// doc comment.
+	fset := token.NewFileSet()
+	f, err := ParseFile(fset, "/foo/bar.xgo", `# doc line 1
+# doc line 2
+func g() {
+}
+`, ParseComments)
+	if err != nil {
+		t.Fatal("ParseFile failed:", err)
+	}
+	decl := f.Decls[0].(*ast.FuncDecl)
+	if decl.Doc == nil {
+		t.Fatal("g has no doc comment")
+	}
+	want := []string{"# doc line 1", "# doc line 2"}
+	if len(decl.Doc.List) != len(want) {
+		t.Fatalf("g doc = %v, want %v", docTexts(decl.Doc), want)
+	}
+	for i, w := range want {
+		if got := decl.Doc.List[i].Text; got != w {
+			t.Fatalf("g doc[%d] = %q, want %q", i, got, w)
+		}
+	}
+}
+
+func TestCommentHashStyleBetweenDecls(t *testing.T) {
+	// A '#' comment right after a declaration used to be swallowed as a line
+	// comment of the preceding token, so it never showed up as the doc comment
+	// of the following declaration.
+	fset := token.NewFileSet()
+	f, err := ParseFile(fset, "/foo/bar.xgo", `func f() {
+}
+
+# doc of g
+func g() {
+}
+
+# doc of h
+type h int
+`, ParseComments)
+	if err != nil {
+		t.Fatal("ParseFile failed:", err)
+	}
+	want := []string{"# doc of g", "# doc of h"}
+	var got []string
+	for _, d := range f.Decls {
+		switch v := d.(type) {
+		case *ast.FuncDecl:
+			if v.Name.Name == "g" {
+				got = append(got, docTexts(v.Doc)...)
+			}
+		case *ast.GenDecl:
+			for _, spec := range v.Specs {
+				if ts, ok := spec.(*ast.TypeSpec); ok && ts.Name.Name == "h" {
+					got = append(got, docTexts(v.Doc)...)
+				}
+			}
+		}
+	}
+	if len(got) != len(want) {
+		t.Fatalf("docs = %v, want %v", got, want)
+	}
+	for i, w := range want {
+		if got[i] != w {
+			t.Fatalf("docs[%d] = %q, want %q", i, got[i], w)
+		}
+	}
+}
+
+func docTexts(doc *ast.CommentGroup) []string {
+	if doc == nil {
+		return nil
+	}
+	ret := make([]string, len(doc.List))
+	for i, c := range doc.List {
+		ret[i] = c.Text
+	}
+	return ret
+}
+
 func TestDefaultClassInfo(t *testing.T) {
 	_, isProj, ok := DefaultClassInfo("foo.gsh")
 	if !isProj || !ok {
@@ -489,3 +574,120 @@ onStart => {
 }
 
 // -----------------------------------------------------------------------------
+
+func TestTypeParamDecls(t *testing.T) {
+	// Type parameters may be declared on functions and on types, and the
+	// parser has to tell a type parameter list apart from an array length.
+	fset := token.NewFileSet()
+	f, err := ParseFile(fset, "/foo/bar.xgo", `func Sum[T Num](xs []T) T {
+	return xs[0]
+}
+
+func Map[K comparable, V any](m map[K]V) []V {
+	return nil
+}
+
+type Pair[T, U any] struct {
+	First  T
+	Second U
+}
+
+type Arr [2]int
+type Matrix [2][3]float64
+`, ParseComments)
+	if err != nil {
+		t.Fatal("ParseFile failed:", err)
+	}
+	sum := f.Decls[0].(*ast.FuncDecl)
+	if tp := sum.Type.TypeParams; tp == nil || len(tp.List) != 1 {
+		t.Fatalf("Sum type params = %v, want 1 field", tp)
+	} else if got := tp.List[0].Names[0].Name; got != "T" {
+		t.Fatalf("Sum type param name = %q, want %q", got, "T")
+	}
+	m := f.Decls[1].(*ast.FuncDecl)
+	if tp := m.Type.TypeParams; tp == nil || len(tp.List) != 2 {
+		t.Fatalf("Map type params = %v, want 2 fields", tp)
+	} else if got, want := tp.List[1].Names[0].Name, "V"; got != want {
+		t.Fatalf("Map second type param name = %q, want %q", got, want)
+	}
+	pair := f.Decls[2].(*ast.GenDecl).Specs[0].(*ast.TypeSpec)
+	// T and U share the constraint `any`, so they are one field with two names.
+	if tp := pair.TypeParams; tp == nil || len(tp.List) != 1 || len(tp.List[0].Names) != 2 {
+		t.Fatalf("Pair type params = %v, want 1 field with 2 names", tp)
+	} else if got := tp.List[0].Names[0].Name; got != "T" {
+		t.Fatalf("Pair first type param name = %q, want %q", got, "T")
+	}
+	arr := f.Decls[3].(*ast.GenDecl).Specs[0].(*ast.TypeSpec)
+	if arr.TypeParams != nil {
+		t.Fatalf("Arr type params = %v, want nil", arr.TypeParams)
+	}
+	if _, ok := arr.Type.(*ast.ArrayType); !ok {
+		t.Fatalf("Arr type = %T, want *ast.ArrayType", arr.Type)
+	}
+	matrix := f.Decls[4].(*ast.GenDecl).Specs[0].(*ast.TypeSpec)
+	if matrix.TypeParams != nil {
+		t.Fatalf("Matrix type params = %v, want nil", matrix.TypeParams)
+	}
+	if _, ok := matrix.Type.(*ast.ArrayType); !ok {
+		t.Fatalf("Matrix type = %T, want *ast.ArrayType", matrix.Type)
+	}
+}
+
+func TestInterfaceTypeSet(t *testing.T) {
+	// An interface may embed type sets: a term prefixed with ~, and a union
+	// of terms. Both may be mixed with methods and embedded interfaces.
+	fset := token.NewFileSet()
+	f, err := ParseFile(fset, "/foo/bar.xgo", `type Num interface {
+	~int | ~float64
+	comparable
+	Foo(T) T
+	[]byte | string
+	map[string]int
+}
+`, ParseComments)
+	if err != nil {
+		t.Fatal("ParseFile failed:", err)
+	}
+	spec := f.Decls[0].(*ast.GenDecl).Specs[0].(*ast.TypeSpec)
+	intf, ok := spec.Type.(*ast.InterfaceType)
+	if !ok {
+		t.Fatalf("Num type = %T, want *ast.InterfaceType", spec.Type)
+	}
+	list := intf.Methods.List
+	if len(list) != 5 {
+		t.Fatalf("Num has %d elements, want 5", len(list))
+	}
+	// ~int | ~float64
+	if len(list[0].Names) != 0 {
+		t.Fatalf("element 0 has names %v, want none", list[0].Names)
+	}
+	bin, ok := list[0].Type.(*ast.BinaryExpr)
+	if !ok || bin.Op != token.OR {
+		t.Fatalf("element 0 type = %v, want a '|' expression", list[0].Type)
+	}
+	if u, ok := bin.X.(*ast.UnaryExpr); !ok || u.Op != token.TILDE {
+		t.Fatalf("element 0 left = %v, want a '~' expression", bin.X)
+	}
+	// comparable
+	if len(list[1].Names) != 0 {
+		t.Fatalf("element 1 has names %v, want none", list[1].Names)
+	}
+	if id, ok := list[1].Type.(*ast.Ident); !ok || id.Name != "comparable" {
+		t.Fatalf("element 1 type = %v, want comparable", list[1].Type)
+	}
+	// Foo(T) T
+	if len(list[2].Names) != 1 || list[2].Names[0].Name != "Foo" {
+		t.Fatalf("element 2 names = %v, want Foo", list[2].Names)
+	}
+	if _, ok := list[2].Type.(*ast.FuncType); !ok {
+		t.Fatalf("element 2 type = %T, want *ast.FuncType", list[2].Type)
+	}
+	// []byte | string
+	if bin, ok := list[3].Type.(*ast.BinaryExpr); !ok || bin.Op != token.OR {
+		t.Fatalf("element 3 type = %v, want a '|' expression", list[3].Type)
+	}
+	// map[string]int
+	if _, ok := list[4].Type.(*ast.MapType); !ok {
+		t.Fatalf("element 4 type = %T, want *ast.MapType", list[4].Type)
+	}
+}

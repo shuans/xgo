@@ -23,7 +23,6 @@ import (
 	"go/token"
 	"go/types"
 	"io"
-	"log"
 	"os"
 	"os/exec"
 	"path"
@@ -124,7 +123,9 @@ func (p *Importer) PkgHash(pkgPath string, self bool) string {
 	if isPkgInMod(pkgPath, xgoMod) || isPkgInMod(pkgPath, xMod) {
 		return p.xgo.Version
 	}
-	log.Println("PkgHash: unexpected package -", pkgPath)
+	// The package isn't covered by the module cache, so its hash is unknown.
+	// cache.HashInvalid means "always treat as dirty", which is a legitimate
+	// result here and not worth reporting to the user.
 	return cache.HashInvalid
 }
 
